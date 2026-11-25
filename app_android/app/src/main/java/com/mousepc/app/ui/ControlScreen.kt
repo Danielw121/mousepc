@@ -261,12 +261,13 @@ private fun SettingsContent(s: AppSettings) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Row(
-            Modifier.horizontalScroll(rememberScrollState()).padding(vertical = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            FingerIcon.entries.forEach { icon ->
-                FingerIconOption(icon, selected = s.fingerIcon == icon.id) { s.fingerIcon = icon.id }
+        Column(Modifier.padding(vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            FingerIcon.entries.chunked(3).forEach { row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    row.forEach { icon ->
+                        FingerIconOption(icon, s.fingerIcon == icon.id, Modifier.weight(1f)) { s.fingerIcon = icon.id }
+                    }
+                }
             }
         }
 

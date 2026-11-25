@@ -14,7 +14,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -160,11 +160,11 @@ private fun DrawScope.drawStar(c: Offset, r: Float, phase: Float) {
 
 /** Tarjeta para elegir el icono en los ajustes. */
 @Composable
-fun FingerIconOption(icon: FingerIcon, selected: Boolean, onClick: () -> Unit) {
+fun FingerIconOption(icon: FingerIcon, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val phase = rememberIconPhase(icon)
     Column(
-        Modifier.width(76.dp).clip(RoundedCornerShape(16.dp)).clickable(onClick = onClick),
+        modifier.clip(RoundedCornerShape(16.dp)).clickable(onClick = onClick).padding(vertical = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
@@ -191,7 +191,7 @@ fun FingerIconOption(icon: FingerIcon, selected: Boolean, onClick: () -> Unit) {
             style = MaterialTheme.typography.labelSmall,
             textAlign = TextAlign.Center,
             color = if (selected) cs.primary else cs.onSurfaceVariant,
-            maxLines = 2,
+            maxLines = 1,
         )
     }
 }
