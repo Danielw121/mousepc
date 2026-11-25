@@ -19,6 +19,9 @@ como un **touchpad**, como un **air mouse con el giroscopio** o escribiendo con 
 
 La primera vez, Windows pregunta por el firewall: permite el acceso en **redes privadas**.
 
+Si el mouse deja de responder en una ventana, es porque esa ventana corre **como administrador** (p. ej. el Administrador de tareas)
+y Windows no deja controlarla: MousePC avisa en el PC y en el teléfono. Usa *clic derecho en el icono → Ejecutar como administrador*.
+
 ### Gestos
 
 | Gesto | Acción |

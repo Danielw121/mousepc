@@ -81,7 +81,27 @@ def local_ips():
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+shell32 = ctypes.WinDLL("shell32", use_last_error=True)
 ULONG_PTR = ctypes.c_size_t
+
+kernel32.CreateMutexW.restype = wt.HANDLE
+kernel32.CreateMutexW.argtypes = (ctypes.c_void_p, wt.BOOL, wt.LPCWSTR)
+kernel32.OpenProcess.restype = wt.HANDLE
+kernel32.OpenProcess.argtypes = (wt.DWORD, wt.BOOL, wt.DWORD)
+kernel32.CloseHandle.argtypes = (wt.HANDLE,)
+kernel32.QueryFullProcessImageNameW.argtypes = (wt.HANDLE, wt.DWORD, wt.LPWSTR, ctypes.POINTER(wt.DWORD))
+user32.GetForegroundWindow.restype = wt.HWND
+user32.GetWindowThreadProcessId.argtypes = (wt.HWND, ctypes.POINTER(wt.DWORD))
+advapi32.OpenProcessToken.argtypes = (wt.HANDLE, wt.DWORD, ctypes.POINTER(wt.HANDLE))
+advapi32.GetTokenInformation.argtypes = (wt.HANDLE, ctypes.c_int, ctypes.c_void_p, wt.DWORD,
+                                         ctypes.POINTER(wt.DWORD))
+advapi32.GetSidSubAuthorityCount.restype = ctypes.POINTER(ctypes.c_ubyte)
+advapi32.GetSidSubAuthorityCount.argtypes = (ctypes.c_void_p,)
+advapi32.GetSidSubAuthority.restype = ctypes.POINTER(wt.DWORD)
+advapi32.GetSidSubAuthority.argtypes = (ctypes.c_void_p, wt.DWORD)
+shell32.ShellExecuteW.restype = ctypes.c_void_p
+shell32.ShellExecuteW.argtypes = (wt.HWND, wt.LPCWSTR, wt.LPCWSTR, wt.LPCWSTR, wt.LPCWSTR, ctypes.c_int)
 
 
 class MOUSEINPUT(ctypes.Structure):
@@ -194,10 +214,85 @@ def type_text(text):
 # Servidor UDP
 # --------------------------------------------------------------------------
 
+# --------------------------------------------------------------------------
+# Ventanas de administrador
+# Windows no deja que un programa normal mande clics/teclas a una ventana que
+# corre como administrador (p. ej. el Administrador de tareas). Lo detectamos
+# para avisar, y MousePC puede reabrirse como administrador.
+# --------------------------------------------------------------------------
+
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+TOKEN_QUERY = 0x0008
+TOKEN_INTEGRITY_LEVEL = 25
+
+
+def _process_integrity(hproc):
+    tok = wt.HANDLE()
+    if not advapi32.OpenProcessToken(hproc, TOKEN_QUERY, ctypes.byref(tok)):
+        return None
+    try:
+        need = wt.DWORD()
+        advapi32.GetTokenInformation(tok, TOKEN_INTEGRITY_LEVEL, None, 0, ctypes.byref(need))
+        buf = ctypes.create_string_buffer(need.value)
+        if not advapi32.GetTokenInformation(tok, TOKEN_INTEGRITY_LEVEL, buf, need, ctypes.byref(need)):
+            return None
+        sid = ctypes.cast(buf, ctypes.POINTER(ctypes.c_void_p))[0]  # TOKEN_MANDATORY_LABEL.Label.Sid
+        count = advapi32.GetSidSubAuthorityCount(sid)[0]
+        return advapi32.GetSidSubAuthority(sid, count - 1)[0]
+    finally:
+        kernel32.CloseHandle(tok)
+
+
+OWN_INTEGRITY = _process_integrity(kernel32.GetCurrentProcess()) or 0x2000
+
+
+def is_admin():
+    try:
+        return bool(shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+IS_ADMIN = is_admin()
+
+
+def blocked_foreground():
+    """Nombre del programa al frente si Windows no nos deja controlarlo; None si se puede."""
+    hwnd = user32.GetForegroundWindow()
+    if not hwnd:
+        return None
+    pid = wt.DWORD()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    if not pid.value or pid.value == os.getpid():
+        return None
+    h = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
+    if not h:
+        return None  # sin datos: mejor no avisar de más
+    try:
+        level = _process_integrity(h)
+        if level is None or level <= OWN_INTEGRITY:
+            return None
+        buf = ctypes.create_unicode_buffer(260)
+        n = wt.DWORD(260)
+        name = "una ventana de administrador"
+        if kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(n)):
+            name = os.path.basename(buf.value)
+        return name
+    finally:
+        kernel32.CloseHandle(h)
+
+
+INPUT_TYPES = {"m", "c", "d", "u", "s", "txt", "key"}
+WARN_EVERY = 15.0  # s entre avisos repetidos
+
+
 class MouseServer:
-    def __init__(self, cfg, on_change):
+    def __init__(self, cfg, on_change, on_blocked=None):
         self.cfg = cfg
         self.on_change = on_change
+        self.on_blocked = on_blocked or (lambda name: None)
+        self._fg_checked = 0.0
+        self._last_warn = 0.0
         self.sock = None
         self.thread = None
         self.running = False
@@ -287,6 +382,21 @@ class MouseServer:
                 self._release_all()
             self.on_change()
 
+    def _check_foreground(self):
+        """Si hay una ventana de administrador al frente, avisa al teléfono y en la bandeja."""
+        if IS_ADMIN:
+            return
+        now = time.monotonic()
+        if now - self._fg_checked < 0.5:
+            return
+        self._fg_checked = now
+        name = blocked_foreground()
+        if name and now - self._last_warn > WARN_EVERY:
+            self._last_warn = now
+            for addr in list(self.clients):
+                self._reply(addr, {"t": "warn", "k": "admin", "app": name})
+            self.on_blocked(name)
+
     def _release_all(self):
         for b in list(self.held):
             mouse_button(b, False)
@@ -337,6 +447,8 @@ class MouseServer:
             return
         if not enabled:
             return
+        if t in INPUT_TYPES:
+            self._check_foreground()
 
         if t == "m":
             speed = float(self.cfg["speed"])
@@ -390,17 +502,44 @@ class MouseServer:
 # Inicio con Windows
 # --------------------------------------------------------------------------
 
-def _launch_command():
+TASK_NAME = "MousePC"  # tarea programada para iniciar como administrador sin preguntar
+CREATE_NO_WINDOW = 0x08000000
+
+
+def _launch_parts():
+    """(programa, argumentos) para volver a abrir este mismo MousePC."""
     if getattr(sys, "frozen", False):  # .exe de PyInstaller
-        return f'"{sys.executable}"'
+        return sys.executable, ""
     exe = sys.executable
     pyw = os.path.join(os.path.dirname(exe), "pythonw.exe")
     if os.path.exists(pyw):
         exe = pyw
-    return f'"{exe}" "{os.path.abspath(__file__)}"'
+    return exe, f'"{os.path.abspath(__file__)}"'
 
 
-def autostart_enabled():
+def _launch_command():
+    exe, args = _launch_parts()
+    return f'"{exe}" {args}'.strip()
+
+
+def relaunch_elevated():
+    """Abre MousePC como administrador (Windows pregunta). True si el usuario aceptó."""
+    exe, args = _launch_parts()
+    r = shell32.ShellExecuteW(None, "runas", exe, f"{args} --replace".strip(), None, 1)
+    return (r or 0) > 32
+
+
+def _schtasks(*args):
+    import subprocess
+    return subprocess.run(["schtasks", *args], capture_output=True, text=True,
+                          creationflags=CREATE_NO_WINDOW)
+
+
+def admin_task_exists():
+    return _schtasks("/Query", "/TN", TASK_NAME).returncode == 0
+
+
+def _run_key_exists():
     import winreg
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
@@ -410,7 +549,7 @@ def autostart_enabled():
         return False
 
 
-def set_autostart(on):
+def _set_run_key(on):
     import winreg
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
         if on:
@@ -420,6 +559,59 @@ def set_autostart(on):
                 winreg.DeleteValue(k, APP)
             except OSError:
                 pass
+
+
+def _create_admin_task():
+    from xml.sax.saxutils import escape
+    import tempfile
+    exe, args = _launch_parts()
+    user = escape(f'{os.environ.get("USERDOMAIN", "")}\\{os.environ.get("USERNAME", "")}')
+    # Sin límite de tiempo y también con batería (los valores por defecto de Windows lo cortarían).
+    xml = f"""<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Description>Inicia MousePC como administrador al entrar a Windows.</Description></RegistrationInfo>
+  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>{user}</UserId></LogonTrigger></Triggers>
+  <Principals><Principal id="Author"><UserId>{user}</UserId><LogonType>InteractiveToken</LogonType>
+    <RunLevel>HighestAvailable</RunLevel></Principal></Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>7</Priority>
+  </Settings>
+  <Actions Context="Author"><Exec><Command>{escape(exe)}</Command><Arguments>{escape(args)}</Arguments></Exec></Actions>
+</Task>
+"""
+    fd, path = tempfile.mkstemp(suffix=".xml")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-16") as f:
+            f.write(xml)
+        r = _schtasks("/Create", "/TN", TASK_NAME, "/XML", path, "/F")
+    finally:
+        os.remove(path)
+    if r.returncode != 0:
+        raise OSError((r.stderr or r.stdout).strip() or "schtasks falló")
+
+
+def autostart_enabled():
+    return _run_key_exists() or admin_task_exists()
+
+
+def set_autostart(on, admin=False):
+    """Inicio con Windows: normal (registro) o como administrador (tarea programada)."""
+    if on and admin:
+        if not IS_ADMIN:
+            raise OSError("Para iniciar como administrador, primero abre MousePC como administrador "
+                          "(menú del icono → Ejecutar como administrador).")
+        _create_admin_task()
+        _set_run_key(False)
+        return
+    if admin_task_exists():
+        r = _schtasks("/Delete", "/TN", TASK_NAME, "/F")
+        if r.returncode != 0:
+            raise OSError("Para quitar el inicio como administrador, abre MousePC como administrador.")
+    _set_run_key(on)
 
 
 # --------------------------------------------------------------------------
@@ -449,7 +641,8 @@ class TrayApp:
         self.root = tk.Tk()
         self.root.withdraw()
         self.settings_win = None
-        self.server = MouseServer(self.cfg, lambda: self.events.put("refresh"))
+        self.server = MouseServer(self.cfg, lambda: self.events.put("refresh"),
+                                  lambda name: self.events.put(("blocked", name)))
         self.icon = pystray.Icon(APP, make_icon("idle"), APP, menu=self._menu())
 
     # Los callbacks de pystray corren en otro hilo: se pasan a tkinter por la cola.
@@ -467,6 +660,7 @@ class TrayApp:
             M("Desconectar teléfonos", self._post("kick"),
               enabled=lambda i: bool(self.server.clients)),
             M("Configuración…", self._post("settings"), default=True),
+            M("Ejecutar como administrador", self._post("elevate"), visible=not IS_ADMIN),
             pystray.Menu.SEPARATOR,
             M("Salir", self._post("quit")),
         )
@@ -481,14 +675,21 @@ class TrayApp:
         else:
             state = "idle"
         self.icon.icon = make_icon(state)
-        self.icon.title = f"{APP} – {self.server.status_text()}"[:127]
+        admin = " (administrador)" if IS_ADMIN else ""
+        self.icon.title = f"{APP}{admin} – {self.server.status_text()}"[:127]
         self.icon.update_menu()
 
     def _pump(self):
         try:
             while True:
                 ev = self.events.get_nowait()
-                if ev == "refresh":
+                if isinstance(ev, tuple) and ev[0] == "blocked":
+                    self._notify_blocked(ev[1])
+                elif ev == "elevate":
+                    if relaunch_elevated():
+                        self.quit()  # la copia de administrador toma el relevo
+                        return
+                elif ev == "refresh":
                     self._refresh()
                 elif ev == "toggle":
                     self.cfg["enabled"] = not self.cfg["enabled"]
@@ -506,6 +707,16 @@ class TrayApp:
         except queue.Empty:
             pass
         self.root.after(100, self._pump)
+
+    def _notify_blocked(self, name):
+        try:
+            self.icon.notify(
+                f"{name} se abrió como administrador y Windows no deja controlarlo desde el teléfono.\n"
+                "Clic derecho en el icono de MousePC → Ejecutar como administrador.",
+                "MousePC no puede controlar esta ventana",
+            )
+        except Exception:
+            pass
 
     def open_settings(self):
         if self.settings_win is not None and self.settings_win.winfo_exists():
@@ -583,6 +794,18 @@ class SettingsWindow:
         ttk.Checkbutton(frm, text="Iniciar con Windows", variable=self.autostart).grid(
             row=r, column=0, columnspan=3, sticky="w")
         r += 1
+        self.admin_task_before = admin_task_exists()
+        self.admin_start = tk.BooleanVar(value=self.admin_task_before)
+        ttk.Checkbutton(frm, text="…como administrador (para controlar también ventanas de administrador)",
+                        variable=self.admin_start,
+                        state="normal" if IS_ADMIN or self.admin_task_before else "disabled").grid(
+            row=r, column=0, columnspan=3, sticky="w", padx=(22, 0))
+        r += 1
+        ttk.Label(frm, foreground="#555",
+                  text=("Ahora corre como administrador." if IS_ADMIN else
+                        "Para activarlo, abre MousePC como administrador desde el menú del icono.")).grid(
+            row=r, column=0, columnspan=3, sticky="w", padx=(22, 0))
+        r += 1
 
         btns = ttk.Frame(frm)
         btns.grid(row=r, column=0, columnspan=3, sticky="e", pady=(14, 0))
@@ -614,8 +837,9 @@ class SettingsWindow:
                    scroll_speed=round(self.scroll.get(), 2), enabled=self.enabled.get())
         save_config(cfg)
         try:
-            if self.autostart.get() != autostart_enabled():
-                set_autostart(self.autostart.get())
+            want_admin = self.autostart.get() and self.admin_start.get()
+            if self.autostart.get() != autostart_enabled() or want_admin != self.admin_task_before:
+                set_autostart(self.autostart.get(), admin=want_admin)
         except OSError as e:
             messagebox.showwarning(APP, f"No se pudo cambiar el inicio automático: {e}",
                                    parent=self.app.settings_win)
@@ -632,9 +856,23 @@ class SettingsWindow:
 
 # --------------------------------------------------------------------------
 
-def single_instance():
-    kernel32.CreateMutexW(None, False, "Local\\MousePC_single_instance")
-    return ctypes.get_last_error() != 183  # ERROR_ALREADY_EXISTS
+_mutex = None
+
+
+def single_instance(wait=0.0):
+    """True si somos el único MousePC. Con wait>0 espera a que el anterior termine de cerrarse."""
+    global _mutex
+    deadline = time.monotonic() + wait
+    while True:
+        ctypes.set_last_error(0)
+        h = kernel32.CreateMutexW(None, False, "Local\\MousePC_single_instance")
+        if ctypes.get_last_error() != 183:  # ERROR_ALREADY_EXISTS
+            _mutex = h
+            return True
+        kernel32.CloseHandle(h)
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.3)
 
 
 def main():
@@ -642,7 +880,7 @@ def main():
         ctypes.windll.shcore.SetProcessDpiAwareness(1)  # ventana nítida en pantallas HiDPI
     except Exception:
         pass
-    if not single_instance():
+    if not single_instance(wait=10.0 if "--replace" in sys.argv else 0.0):
         r = tk.Tk()
         r.withdraw()
         messagebox.showinfo(APP, "MousePC ya está abierto. Búscalo en los iconos ocultos de la barra de tareas.")

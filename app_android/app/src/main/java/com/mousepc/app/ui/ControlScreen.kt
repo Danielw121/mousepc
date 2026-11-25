@@ -52,6 +52,7 @@ import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.ScreenRotationAlt
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -177,6 +178,28 @@ fun ControlScreen(conn: PcConnection, s: AppSettings) {
                 .padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            // Aviso del PC: aparece unos segundos y se va solo.
+            var lastWarning by remember { mutableStateOf("") }
+            conn.warning?.let { lastWarning = it }
+            AnimatedVisibility(
+                visible = conn.warning != null,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically(),
+            ) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color(0xFF4A3A10))
+                        .padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Default.Warning, null, tint = Color(0xFFFFC94D))
+                    Spacer(Modifier.width(10.dp))
+                    Text(lastWarning, color = Color(0xFFFFE7B0), style = MaterialTheme.typography.bodySmall)
+                }
+            }
+
             ModeToggle(s.mode, fb, view) { s.mode = it }
 
             Box(Modifier.weight(1f).fillMaxWidth()) {

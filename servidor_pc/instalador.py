@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import tkinter as tk
 import winreg
 from tkinter import filedialog, messagebox, ttk
@@ -30,6 +31,7 @@ DEFAULT_DEST = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~
 UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\MousePC"
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 MUTEX_NAME = "Local\\MousePC_single_instance"
+TASK_NAME = "MousePC"  # tarea de "iniciar como administrador" (la crea el propio MousePC)
 CREATE_NO_WINDOW = 0x08000000
 
 
@@ -80,12 +82,42 @@ def server_running():
     return False
 
 
-def stop_server():
-    """Cierra cualquier MousePC abierto (de cualquier carpeta)."""
-    ps = ("Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*mousepc_server.py*' } "
-          "| ForEach-Object { Stop-Process -Id $_.ProcessId -Force }")
+STOP_PS = ("Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*mousepc_server.py*' } "
+           "| ForEach-Object { Stop-Process -Id $_.ProcessId -Force }")
+
+
+def _run_elevated(exe, args):
+    """Ejecuta algo como administrador (Windows pregunta) y espera a que termine."""
+    ps = (f"Start-Process -FilePath '{exe}' -ArgumentList '{args.replace(chr(39), chr(39) * 2)}' "
+          "-Verb RunAs -WindowStyle Hidden -Wait")
     subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
                    creationflags=CREATE_NO_WINDOW, check=False)
+
+
+def stop_server():
+    """Cierra cualquier MousePC abierto (de cualquier carpeta)."""
+    subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", STOP_PS],
+                   creationflags=CREATE_NO_WINDOW, check=False)
+    for _ in range(10):
+        if not server_running():
+            return
+        time.sleep(0.3)
+    # Sigue abierto: seguramente corre como administrador; hace falta permiso para cerrarlo.
+    _run_elevated("powershell", f'-NoProfile -Command "{STOP_PS}"')
+
+
+def admin_task_exists():
+    return subprocess.run(["schtasks", "/Query", "/TN", TASK_NAME], capture_output=True,
+                          creationflags=CREATE_NO_WINDOW).returncode == 0
+
+
+def remove_admin_task():
+    if not admin_task_exists():
+        return
+    r = subprocess.run(["schtasks", "/Delete", "/TN", TASK_NAME, "/F"], capture_output=True,
+                       creationflags=CREATE_NO_WINDOW)
+    if r.returncode != 0:
+        _run_elevated("schtasks", f"/Delete /TN {TASK_NAME} /F")
 
 
 # --------------------------------------------------------------------------
@@ -134,6 +166,8 @@ def register_uninstall(dest, version):
 
 
 def set_autostart(dest, on):
+    if on and admin_task_exists():
+        on = False  # ya inicia como administrador con la tarea programada; no abrirlo dos veces
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
         if on:
             p = paths_for(dest)
@@ -200,6 +234,7 @@ def uninstall(remove_config=False):
         if os.path.exists(lnk):
             os.remove(lnk)
     set_autostart(dest or BUNDLE, False)
+    remove_admin_task()
     try:
         winreg.DeleteKey(winreg.HKEY_CURRENT_USER, UNINSTALL_KEY)
     except OSError:

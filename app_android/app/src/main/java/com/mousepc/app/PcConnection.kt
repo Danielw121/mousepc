@@ -52,6 +52,11 @@ class PcConnection(private val deviceName: String) {
         private set
     val found = mutableStateListOf<FoundPc>()
 
+    /** Aviso del PC (p. ej. ventana de administrador que Windows no deja controlar). */
+    var warning by mutableStateOf<String?>(null)
+        private set
+    private val clearWarning = Runnable { warning = null }
+
     // ---------------------------------------------------------------- red
     @Synchronized
     private fun sock(): DatagramSocket {
@@ -223,6 +228,13 @@ class PcConnection(private val deviceName: String) {
             }
             "blocked" -> {
                 stopTimers(); changeState(ConnState.BLOCKED)
+            }
+            "warn" -> if (m.optString("k") == "admin") {
+                val app = m.optString("app").ifBlank { "Esa ventana" }
+                warning = "$app es de administrador y Windows no deja controlarla. " +
+                    "En el PC: clic derecho en el icono de MousePC → Ejecutar como administrador."
+                main.removeCallbacks(clearWarning)
+                main.postDelayed(clearWarning, 8000)
             }
         }
     }
