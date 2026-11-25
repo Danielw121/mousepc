@@ -16,7 +16,7 @@ class AppSettings(context: Context) {
     var scrollSens by floatPref("scrollSens", 1f)
     var naturalScroll by boolPref("naturalScroll", true) // como en el teléfono
     var gyroSens by floatPref("gyroSens", 1f)
-    var gyroUpright by boolPref("gyroUpright", false)    // false = plano, como control remoto
+    var gyroInvertY by boolPref("gyroInvertY", false)    // invertir arriba/abajo del giroscopio
     var mode by stringPref("mode", "touch")              // "touch" | "gyro"
 
     var fingerIcon by stringPref("fingerIcon", "circle") // icono que sigue al dedo en el touchpad

@@ -43,6 +43,8 @@ import androidx.compose.ui.unit.dp
 import com.mousepc.app.AppSettings
 import com.mousepc.app.PcConnection
 import kotlin.math.abs
+import kotlin.math.sign
+import kotlin.math.sqrt
 
 /**
  * Convierte la velocidad de giro del teléfono (rad/s) en movimiento del puntero.
@@ -54,23 +56,61 @@ private class GyroMouse(private val conn: PcConnection, private val s: AppSettin
     private var lastNs = 0L
     private var vx = 0f
     private var vy = 0f
+    // Dirección "arriba" del mundo vista desde el teléfono (vector unitario, filtrado).
+    private var gx = 0f
+    private var gy = 0f
+    private var gz = 1f
+    private var hasGravity = false
+
+    /** Gravedad (TYPE_GRAVITY) o acelerómetro filtrado si no hay sensor de gravedad. */
+    fun onGravity(x: Float, y: Float, z: Float, filtered: Boolean) {
+        val n = sqrt(x * x + y * y + z * z)
+        if (n < 1f) return
+        val a = if (filtered || !hasGravity) 1f else 0.1f
+        gx += (x / n - gx) * a
+        gy += (y / n - gy) * a
+        gz += (z / n - gz) * a
+        val m = sqrt(gx * gx + gy * gy + gz * gz)
+        gx /= m; gy /= m; gz /= m
+        hasGravity = true
+    }
 
     override fun onSensorChanged(e: SensorEvent) {
+        when (e.sensor.type) {
+            Sensor.TYPE_GRAVITY -> return onGravity(e.values[0], e.values[1], e.values[2], true)
+            Sensor.TYPE_ACCELEROMETER -> return onGravity(e.values[0], e.values[1], e.values[2], false)
+        }
         val dt = if (lastNs == 0L) 0f else ((e.timestamp - lastNs) / 1e9f).coerceIn(0f, 0.05f)
         lastNs = e.timestamp
         if (!active) {
             vx = 0f; vy = 0f
             return
         }
-        // Plano (como control remoto): girar = eje Z. Vertical (pantalla hacia ti): girar = eje Y.
-        // Inclinar arriba/abajo es el eje X en los dos casos.
-        var yaw = -(if (s.gyroUpright) e.values[1] else e.values[2])
-        var pitch = -e.values[0]
-        if (abs(yaw) < DEAD_ZONE) yaw = 0f
-        if (abs(pitch) < DEAD_ZONE) pitch = 0f
+        val wx = e.values[0]
+        val wy = e.values[1]
+        val wz = e.values[2]
+        // Izquierda/derecha = girar alrededor del eje vertical del mundo (la gravedad),
+        // así da igual si el teléfono está plano, inclinado o de pie.
+        var yaw = -(wx * gx + wy * gy + wz * gz)
+        // Arriba/abajo = girar alrededor del eje horizontal "derecha" del teléfono
+        // (su eje X sin la parte vertical). Si el teléfono está de lado, se usa su eje Y.
+        var rx = 1f - gx * gx
+        var ry = -gx * gy
+        var rz = -gx * gz
+        var rn = sqrt(rx * rx + ry * ry + rz * rz)
+        if (rn < 0.3f) {
+            rx = -gy * gx; ry = 1f - gy * gy; rz = -gy * gz
+            rn = sqrt(rx * rx + ry * ry + rz * rz)
+        }
+        var pitch = -(wx * rx + wy * ry + wz * rz) / rn
+        if (s.gyroInvertY) pitch = -pitch
+        yaw = softDeadZone(yaw)
+        pitch = softDeadZone(pitch)
         vx = vx * SMOOTHING + yaw * (1 - SMOOTHING)
         vy = vy * SMOOTHING + pitch * (1 - SMOOTHING)
-        val k = PX_PER_RAD * s.gyroSens * dt
+        // Aceleración suave: giros lentos = precisión, giros rápidos = cruzar la pantalla.
+        val speed = sqrt(vx * vx + vy * vy).coerceAtMost(2.5f)
+        val k = PX_PER_RAD * s.gyroSens * dt * (0.6f + 0.8f * speed)
         val dx = vx * k
         val dy = vy * k
         if (abs(dx) + abs(dy) > 0.05f) {
@@ -80,6 +120,12 @@ private class GyroMouse(private val conn: PcConnection, private val s: AppSettin
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+
+    /** Quita el temblor sin dar un salto al pasar el umbral. */
+    private fun softDeadZone(v: Float): Float {
+        val a = abs(v) - DEAD_ZONE
+        return if (a <= 0f) 0f else a * sign(v)
+    }
 
     companion object {
         const val DEAD_ZONE = 0.035f   // rad/s: ignora el temblor de la mano
@@ -100,7 +146,12 @@ fun GyroPad(conn: PcConnection, s: AppSettings, modifier: Modifier = Modifier) {
     val sensor = remember { sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE) }
 
     DisposableEffect(sensor) {
-        if (sensor != null) sensorManager.registerListener(gyro, sensor, SensorManager.SENSOR_DELAY_GAME)
+        if (sensor != null) {
+            sensorManager.registerListener(gyro, sensor, SensorManager.SENSOR_DELAY_GAME)
+            val grav = sensorManager.getDefaultSensor(Sensor.TYPE_GRAVITY)
+                ?: sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+            if (grav != null) sensorManager.registerListener(gyro, grav, SensorManager.SENSOR_DELAY_GAME)
+        }
         onDispose { sensorManager.unregisterListener(gyro) }
     }
     gyro.active = holding || locked

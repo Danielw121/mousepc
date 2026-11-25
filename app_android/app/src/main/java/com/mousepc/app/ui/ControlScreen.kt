@@ -297,11 +297,10 @@ private fun SettingsContent(s: AppSettings) {
         Section("3. Giroscopio")
         SettingSlider("Sensibilidad", s.gyroSens, 0.3f..3f) { s.gyroSens = it }
         SettingSwitch(
-            "Sostener vertical",
-            if (s.gyroUpright) "Pantalla hacia ti, apuntando con la parte trasera"
-            else "Plano, apuntando con la punta como un control remoto",
-            s.gyroUpright,
-        ) { s.gyroUpright = it }
+            "Invertir arriba/abajo",
+            "Funciona en cualquier posición: plano, inclinado o vertical",
+            s.gyroInvertY,
+        ) { s.gyroInvertY = it }
 
         Section("4. Sonido y vibración")
         SettingSwitch("Sonido al hacer clic", null, s.clickSound) { s.clickSound = it }
