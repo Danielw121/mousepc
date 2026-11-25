@@ -29,6 +29,9 @@ La primera vez, Windows pregunta por el firewall: permite el acceso en **redes p
 | Tocar, volver a tocar y deslizar | Arrastrar |
 | Modo giroscopio | Mantén apretado y apunta moviendo el teléfono; toque corto = clic |
 
+Además: barra de **volumen del PC** (y los botones de volumen del teléfono lo controlan), **sonido y vibración** al hacer clic,
+y un **icono que sigue al dedo** (círculo, patita de gato, átomo, puntero grande o estrella) que se elige en Ajustes.
+
 ## Estructura
 
 ```

@@ -5,7 +5,7 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
-import android.view.HapticFeedbackConstants
+import com.mousepc.app.MousePcApp
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -92,6 +92,7 @@ private class GyroMouse(private val conn: PcConnection, private val s: AppSettin
 fun GyroPad(conn: PcConnection, s: AppSettings, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val view = LocalView.current
+    val fb = (context.applicationContext as MousePcApp).feedback
     val gyro = remember { GyroMouse(conn, s) }
     var holding by remember { mutableStateOf(false) }
     var locked by remember { mutableStateOf(false) }
@@ -128,14 +129,14 @@ fun GyroPad(conn: PcConnection, s: AppSettings, modifier: Modifier = Modifier) {
                         gyro.movedWhileActive = false
                         holding = true
                         gyro.active = true
-                        view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                        fb.press(view)
                         val up = waitForUpOrCancellation()
                         holding = false
                         gyro.active = locked
                         // Toque corto sin mover = clic izquierdo
                         if (up != null && up.uptimeMillis - down.uptimeMillis < 220 && !gyro.movedWhileActive) {
                             conn.click("l")
-                            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                            fb.tap(view)
                         }
                     }
                 },

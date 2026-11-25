@@ -1,6 +1,7 @@
 package com.mousepc.app
 
 import android.os.Bundle
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -34,6 +35,19 @@ class MainActivity : ComponentActivity() {
                 if (inControl) ControlScreen(conn, app.settings) else ConnectScreen(conn, app.settings)
             }
         }
+    }
+
+    /** Con la opción activa, los botones de volumen del teléfono cambian el volumen del PC. */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val code = event.keyCode
+        val isVolume = code == KeyEvent.KEYCODE_VOLUME_UP || code == KeyEvent.KEYCODE_VOLUME_DOWN
+        if (isVolume && app.settings.hwVolumeKeys && app.connection.state == ConnState.CONNECTED) {
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                app.connection.key(if (code == KeyEvent.KEYCODE_VOLUME_UP) "volup" else "voldown")
+            }
+            return true
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     override fun onDestroy() {

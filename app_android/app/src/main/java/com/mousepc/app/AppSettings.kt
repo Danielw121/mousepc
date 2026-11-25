@@ -19,6 +19,13 @@ class AppSettings(context: Context) {
     var gyroUpright by boolPref("gyroUpright", false)    // false = plano, como control remoto
     var mode by stringPref("mode", "touch")              // "touch" | "gyro"
 
+    var fingerIcon by stringPref("fingerIcon", "circle") // icono que sigue al dedo en el touchpad
+    var clickSound by boolPref("clickSound", true)
+    var soundVolume by floatPref("soundVolume", 0.7f)
+    var haptics by boolPref("haptics", true)
+    var showVolume by boolPref("showVolume", true)       // barra de volumen del PC en pantalla
+    var hwVolumeKeys by boolPref("hwVolumeKeys", true)   // botones de volumen del teléfono -> volumen del PC
+
     var lastHost by stringPref("lastHost", "")
     var port by intPref("port", 5005)
     var pin by stringPref("pin", "")

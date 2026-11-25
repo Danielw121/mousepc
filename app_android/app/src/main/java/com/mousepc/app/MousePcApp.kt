@@ -7,4 +7,5 @@ import android.os.Build
 class MousePcApp : Application() {
     val settings by lazy { AppSettings(this) }
     val connection by lazy { PcConnection(Build.MODEL ?: "Android") }
+    val feedback by lazy { Feedback(this, settings) }
 }
