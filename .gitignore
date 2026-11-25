@@ -1,0 +1,21 @@
+# Compilados (se publican en Releases, no en el repo)
+*.apk
+servidor_pc/dist/
+dist/
+
+# Python
+__pycache__/
+*.pyc
+
+# Android / Gradle
+app_android/.gradle/
+app_android/.kotlin/
+app_android/build/
+app_android/app/build/
+app_android/local.properties
+app_android/.idea/
+*.iml
+
+# Claves de firma: nunca al repo
+*.jks
+*.keystore
